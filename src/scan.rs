@@ -24,7 +24,22 @@ struct Repository {
     path: PathBuf,
 }
 
+fn is_factory_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|v| v.to_str()),
+        Some("yaml" | "yml")
+    )
+}
+
 fn parse_config(path: &Path) -> Result<Vec<Repository>, String> {
+    if is_factory_file(path) {
+        let (config, base) = crate::config::load(path)?;
+        return Ok(config
+            .scan_repositories(&base)?
+            .into_iter()
+            .map(|(name, branch, path)| Repository { name, branch, path })
+            .collect());
+    }
     let document: Value =
         serde_json::from_str(&fs::read_to_string(path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
@@ -583,8 +598,8 @@ pub fn cli(args: &[String]) -> Result<i32, String> {
         return Ok(0);
     }
     let mut config = None;
-    let mut workers = 4;
-    let mut retries = 2;
+    let mut workers = None;
+    let mut retries = None;
     let mut network = false;
     let mut repo = None;
     let mut cve = None;
@@ -607,8 +622,12 @@ pub fn cli(args: &[String]) -> Result<i32, String> {
         let value = args.get(i).ok_or("Missing option value")?;
         match (action, option) {
             ("scan", "--config") => config = Some(Path::new(value)),
-            ("scan", "--workers") => workers = value.parse::<usize>().map_err(|e| e.to_string())?,
-            ("scan", "--retries") => retries = value.parse::<usize>().map_err(|e| e.to_string())?,
+            ("scan", "--workers") => {
+                workers = Some(value.parse::<usize>().map_err(|e| e.to_string())?)
+            }
+            ("scan", "--retries") => {
+                retries = Some(value.parse::<usize>().map_err(|e| e.to_string())?)
+            }
             ("status", "--repo") => repo = Some(value.as_str()),
             ("status", "--cve") => cve = Some(value.as_str()),
             ("status", "--max-age-seconds") => {
@@ -619,12 +638,24 @@ pub fn cli(args: &[String]) -> Result<i32, String> {
         i += 1;
     }
     match action {
-        "scan" => execute(
-            config.ok_or("--config required")?,
-            workers,
-            retries,
-            network,
-        ),
+        "scan" => {
+            let path = config.ok_or("--config required")?;
+            if is_factory_file(path) {
+                let path = fs::canonicalize(path).map_err(|e| e.to_string())?;
+                let (factory, base) = crate::config::load(&path)?;
+                factory.scan_repositories(&base)?;
+                std::env::set_current_dir(&base).map_err(|e| e.to_string())?;
+                eprintln!("Factory configuration loaded. Applying scan repositories, branches, workers and retries only; agent, promotion and integration settings are declarative, not executable yet.");
+                execute(
+                    &path,
+                    workers.unwrap_or(factory.queue.scan_workers),
+                    retries.unwrap_or(factory.queue.transient_retries),
+                    network,
+                )
+            } else {
+                execute(path, workers.unwrap_or(4), retries.unwrap_or(2), network)
+            }
+        }
         "status" => {
             let result = Store::open(&cwd.join(".lab/scans.sqlite"))?.status(repo, cve, age)?;
             if json_output {
@@ -735,6 +766,19 @@ pub fn init_examples() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn factory_yaml_is_accepted_as_scan_input() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let repositories = parse_config(&root.join("factory.yaml")).unwrap();
+        assert_eq!(repositories.len(), 40);
+        assert_eq!(repositories[0].name, "order-service");
+        assert_eq!(repositories[0].branch, "develop");
+        assert_eq!(
+            repositories[0].path,
+            root.join(".lab/rust-repos/order-service")
+        );
+    }
     #[test]
     fn malformed_scanner_output_is_not_clean() {
         assert!(findings(&json!({"SchemaVersion":2})).is_err());

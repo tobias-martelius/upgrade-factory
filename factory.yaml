@@ -1,0 +1,174 @@
+# Operator-owned factory definition. No tokens or passwords belong in this file.
+# Currently applied to scanning: local repositories, branches, concurrency and retries.
+# Agent execution, promotion, GitLab and Jira below describe the target workflow.
+api_version: upgrade-factory/v1
+name: UpgradeFactory
+
+storage:
+  root: .lab
+
+queue:
+  backend: sqlite
+  scan_workers: 4
+  execution_workers: 2          # Declarative until factory execution loads this file.
+  per_repository: 1
+  transient_retries: 2
+
+sandbox:
+  required: true
+  backend: native
+  network: explicit           # Denied unless the operator passes --network.
+
+branches:
+  development: develop
+  staging: stage
+  production: main
+  work_prefix: upgrade/
+  hotfix_stage_prefix: stage/hotfix-
+
+approvals:
+  work: batch                 # Select all or individual repository actions centrally.
+  final_result: manual        # A separate approval of the exact reviewed candidate.
+
+workflow:
+  request_sources: [cve, maintenance, platform_upgrade, developer_request]
+  feedback: developer_in_the_loop
+  normal:
+    base: develop
+    promote: [develop, stage]
+    stage_gate: all_selected_repositories_verified
+  critical:
+    base: main
+    stage_strategy: isolated_from_production
+    promote_to: main
+    backmerge_to: develop
+
+defaults:
+  toolchain: java21
+  agent: java-upgrader
+
+toolchains:
+  java21:
+    jdk: 21.0.13.1+2
+    maven: 3.9.9
+    trivy: 0.76.2
+
+# Replace model_id with an approved provider model before enabling an agent.
+# credential_ref names a control-plane secret; it is not its value.
+models:
+  primary:
+    provider: openai
+    model_id: configure-before-enabling
+    credential_ref: OPENAI_API_KEY
+  secondary:
+    provider: anthropic
+    model_id: configure-before-enabling
+    credential_ref: ANTHROPIC_API_KEY
+
+agents:
+  java-upgrader:
+    enabled: false            # No agent runtime is implemented yet.
+    runner: codex
+    model: primary
+    mode: autonomous_with_developer_feedback
+    limits:
+      max_attempts: 3
+      timeout_seconds: 1800
+      max_cost_usd: 10.0
+    permissions:
+      writes: candidate_only
+      changes: [dependency_versions, source, build_configuration, tests]
+      preserve_checks: true
+  java-assist:
+    enabled: false
+    runner: pi
+    model: secondary
+    mode: autonomous_with_developer_feedback
+    limits:
+      max_attempts: 5
+      timeout_seconds: 1800
+      max_cost_usd: 15.0
+    permissions:
+      writes: candidate_only
+      changes: [dependency_versions, source, build_configuration, tests]
+      preserve_checks: true
+
+gitlab:
+  enabled: false
+  url: https://gitlab.example.invalid
+  credential_ref: GITLAB_TOKEN
+
+jira:
+  enabled: false
+  url: https://jira.example.invalid
+  project: UPG
+  credential_ref: JIRA_TOKEN
+  ready_for_test_status: ready-for-at-test
+  transition_gate: all_selected_repositories_staged
+
+# Paths are relative to this factory file, not the caller's working directory.
+# repos init-examples creates these local fixtures. Existing .lab/repos is untouched.
+# gitlab_project can identify a future remote checkout, but current scans need path.
+repositories:
+  - name: order-service
+    path: .lab/rust-repos/order-service
+    scan_branches: [develop, main]
+  - name: customer-service
+    path: .lab/rust-repos/customer-service
+    scan_branches: [develop, main]
+  - name: inventory-service
+    path: .lab/rust-repos/inventory-service
+    scan_branches: [develop, main]
+  - name: payment-service
+    path: .lab/rust-repos/payment-service
+    scan_branches: [develop, main]
+    agent: java-assist        # Per-repository override of the default agent.
+    model: secondary
+  - name: shipping-service
+    path: .lab/rust-repos/shipping-service
+    scan_branches: [develop, main]
+  - name: notification-service
+    path: .lab/rust-repos/notification-service
+    scan_branches: [develop, main]
+  - name: catalog-service
+    path: .lab/rust-repos/catalog-service
+    scan_branches: [develop, main]
+  - name: pricing-service
+    path: .lab/rust-repos/pricing-service
+    scan_branches: [develop, main]
+  - name: discount-service
+    path: .lab/rust-repos/discount-service
+    scan_branches: [develop, main]
+  - name: invoice-service
+    path: .lab/rust-repos/invoice-service
+    scan_branches: [develop, main]
+  - name: report-service
+    path: .lab/rust-repos/report-service
+    scan_branches: [develop, main]
+  - name: search-service
+    path: .lab/rust-repos/search-service
+    scan_branches: [develop, main]
+  - name: auth-service
+    path: .lab/rust-repos/auth-service
+    scan_branches: [develop, main]
+  - name: audit-service
+    path: .lab/rust-repos/audit-service
+    scan_branches: [develop, main]
+  - name: booking-service
+    path: .lab/rust-repos/booking-service
+    scan_branches: [develop, main]
+  - name: subscription-service
+    path: .lab/rust-repos/subscription-service
+    scan_branches: [develop, main]
+  - name: document-service
+    path: .lab/rust-repos/document-service
+    scan_branches: [develop, main]
+  - name: integration-service
+    path: .lab/rust-repos/integration-service
+    scan_branches: [develop, main]
+  - name: batch-service
+    path: .lab/rust-repos/batch-service
+    scan_branches: [develop, main]
+  - name: health-service
+    path: .lab/rust-repos/health-service
+    scan_branches: [develop, main]

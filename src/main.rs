@@ -1,3 +1,4 @@
+mod config;
 mod execution;
 mod failure;
 mod queue;
@@ -22,13 +23,17 @@ fn run() -> Result<i32, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args == ["--help"] || args == ["-h"] {
         print!(
-            "{HELP}\n{}\n{}\n{}\n{}\n  upgrade-lab smoke [--network]  (real baseline build/SBOM/scan)\n",
+            "{HELP}\n{}\n{}\n{}\n{}\n{}\n  upgrade-lab smoke [--network]  (real baseline build/SBOM/scan)\n",
             tools::HELP,
             scan::HELP,
             queue::HELP,
-            execution::HELP
+            execution::HELP,
+            config::HELP
         );
         return Ok(0);
+    }
+    if args.first().map(String::as_str) == Some("config") {
+        return config::cli(&args[1..]);
     }
     if args.first().map(String::as_str) == Some("factory") {
         return execution::cli(&args[1..]);

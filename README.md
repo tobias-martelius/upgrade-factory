@@ -1,38 +1,53 @@
-# Upgrade Lab — Rust + native sandbox
+# UpgradeFactory — Rust + native sandbox
 
-Målet är ett självbärande verktyg för SBOM, sårbarhetsskanning och gemensamt
-godkända uppgraderingar av Java-repon. **Rust med native sandbox — inget
-Docker-/Compose- eller Python-beroende.**
+A self-contained tool for SBOM generation, vulnerability scanning and centrally
+approved upgrades across Java repositories. **Rust with native sandboxing — no
+Docker, Compose or Python dependency.** The current binary is named `upgrade-lab`.
+
+## Architecture overview
+
+![UpgradeFactory architecture layers: interaction, evidence and policy, state and integrations, job coordination, native sandbox, and restricted workers. Planned agent capabilities are labelled explicitly.](docs/architecture-overview.svg)
+
+The upper layers form the trusted control plane; tools and future agent workers
+run below the OS sandbox boundary. These are conceptual layers, not a literal
+call chain: approval records and credentials remain outside jobs, and results
+return to the trusted verifier. Features labelled **Planned** are not implemented.
+
+See [Architecture and next steps](#architecture-and-next-steps) for the main
+workflow: approve repository work, let automation or an agent complete it,
+iterate with a developer where needed, then manually approve the finished result.
 
 ## Status
 
-Rust-versionen har ett verkligt, testat **sandboxlager för macOS** och en första
-**verktygshanterare för JDK, Maven och Trivy**:
+The Rust implementation includes a tested **macOS sandbox** and an initial
+**tool manager for JDK, Maven and Trivy**:
 
-- Seatbelt via den fasta systemsökvägen `/usr/bin/sandbox-exec`.
-- Deny-by-default med explicit filåtkomst och stängt nätverk som standard.
-- Barnprocesser ärver samma sandbox.
-- Tom ärvd miljö, privat tillfällig HOME, TMPDIR och arbetskatalog.
-- Tidsgräns och avslutning av jobbets processgrupp.
-- Självtest före användarkommandon. Fel ger stopp, aldrig osandboxad fallback.
-- SHA-256-kontroll av verktygsarkiv med `sha2` (beroenden låsta i `Cargo.lock`).
-- Sandboxad HTTPS-hämtning och uppackning, utan globala installationer.
+- Seatbelt through the fixed system path `/usr/bin/sandbox-exec`.
+- Deny-by-default access, explicit filesystem permissions and networking disabled by default.
+- Child processes inherit the sandbox restrictions.
+- A cleared inherited environment, private temporary HOME, TMPDIR and working directory.
+- Timeouts and process-group termination.
+- A self-test before user commands. Failure stops execution; there is no unsandboxed fallback.
+- SHA-256 verification of tool archives using `sha2`, with dependencies pinned in `Cargo.lock`.
+- Sandboxed HTTPS downloads and extraction, without global installations.
 
-Rust har nu även **lokal Git-skanning, central CVE-status och SBOM-inventarium i
-SQLite**, parallella jobb, felklassificering och begränsade retries.
+It also provides **local Git scanning, central CVE status and an SBOM inventory in
+SQLite**, parallel jobs, failure classification and bounded retries.
 
-**Nytt:** åtgärdskö, Critical-larm, batchgodkännande, tidsfönster och auditlogg via CLI.
-**Nytt:** en första fix-exekverare för godkända, direkta beroendeversionsbyten.
-**Återstår:** kodmigrering/ersättning, GitLab-API och webbvy. Skanningen och
-beslutskön startar inte fixar automatiskt; `factory run` krävs.
-Rust-binären behöver inte Python. `serve` finns ännu inte i Rust.
+The CLI supports remediation proposals, Critical alerts, batch approval, execution
+windows and an audit log. An initial executor handles approved direct dependency
+version changes.
 
-Den tidigare Python-/containerprototypen är borttagen. Historiken finns i Git.
+**Still to implement:** agent-led code migration and dependency replacement,
+developer feedback, recorded manual final approval, GitLab integration and a web interface. Scanning and queue operations do not start fixes
+automatically; `factory run` is required. There is no Rust `serve` command yet.
 
-## Bygg och testa
+The earlier Python/container prototype has been removed. Its history remains in Git.
 
-Rust/Cargo behövs för att bygga utvecklingsversionen. Slutanvändaren kommer att
-kunna köra en färdig plattformsspecifik binär utan Rust-installation.
+## Build and test
+
+Rust/Cargo is required to build the development version. End users can run a
+pre-built, platform-specific binary without installing Rust.
 
 ```sh
 cargo test
@@ -41,155 +56,191 @@ cargo build --release
 ./target/release/upgrade-lab sandbox doctor
 ```
 
-Testerna på macOS kör **riktig Seatbelt**, inte simulerad sandbox. De kontrollerar
-filåtkomst, barnprocessers begränsningar, nekad respektive explicit tillåten lokal
-TCP-anslutning samt timeout. `doctor` kontrollerar filåtkomst och arv; det gör ännu
-inte nätverksprovet. Om OS-backenden inte fungerar misslyckas testerna, de hoppas
-inte över i tysthet.
+The macOS tests use **real Seatbelt**, not a simulated sandbox. They check file
+access, inherited child-process restrictions, denied and explicitly permitted
+local TCP connections, and timeouts. `doctor` checks file access and inheritance;
+it does not yet perform the network probe. If the OS backend does not work, these
+tests fail rather than silently skipping their checks. The separate real-tool
+integration test requires explicit invocation, as described below.
 
-## Snabbstart: verkligt end-to-end-test på macOS ARM64
+## Factory definition
+
+[`factory.yaml`](factory.yaml) describes the factory in one place: repositories,
+branch routes, job settings, toolchains, agents/models, approvals and GitLab/Jira
+integration targets. Defaults can be overridden per repository. Credentials are
+references, never token values.
+
+```sh
+./target/release/upgrade-lab config validate --file factory.yaml
+./target/release/upgrade-lab config plan --file factory.yaml
+```
+
+Validation checks the contract without contacting providers or starting work.
+The effective plan identifies implemented and declarative-only settings. The
+scanner now consumes repository selection, branches, scan concurrency and retry
+settings from this file. Agent execution, branch promotion, Jira transitions and
+other orchestration settings remain planned; `enabled: true` does not implement
+a missing adapter. See the [configuration reference](docs/configuration.md).
+
+## Quick start: real end-to-end test on macOS ARM64
 
 ```sh
 ./target/release/upgrade-lab tools bootstrap
 ./target/release/upgrade-lab smoke --network
 ```
 
-`bootstrap` hämtar de fast valda arkiven i `tools/macos-aarch64.json`, kontrollerar
-SHA-256 och installerar utan Homebrew eller Docker. Om ett verktyg redan finns
-måste dess installationskvitto matcha katalogens arkivhash. Det är inte en
-omhashning av installerade filer. Katalogen gäller bara macOS ARM64:
+`bootstrap` downloads the pinned archives in `tools/macos-aarch64.json`, verifies
+SHA-256 and installs them without Homebrew or Docker. If a tool is already
+installed, its receipt must match the catalogue's archive hash. This does not
+re-hash the installed files. The catalogue currently supports macOS ARM64 only:
 
 - Temurin JDK 21.0.13.1+2
 - Apache Maven 3.9.9
 - Trivy 0.76.2
 
-Utgivarnas release-metadata används som källa, inte kryptografiskt verifierade
-utgivarsignaturer. För Maven verifierades först utgivarens SHA-512, varefter
-SHA-256 beräknades från samma arkiv. Ursprung dokumenteras i katalogen.
+The source is publisher release metadata, not cryptographically verified publisher
+signatures. For Maven, the publisher's SHA-512 was verified first, then SHA-256 was
+calculated from that same archive. Provenance is documented in the catalogue.
 
-Varje `smoke` skapar ett nytt testrepo under `.lab/smoke-runs/<id>/` och sparar
-bygglogg, SBOM-logg, skanningslogg samt `report.json`. Exemplet har två JUnit-tester
-och det äldre testberoendet commons-lang3 3.12.0. Körningen måste hitta det kända
-fyndet **CVE-2025-48924**. Status `completed_with_findings` innebär att testkedjan
-fungerar, **inte** att repot är säkert. Inga uppgraderingar, godkännanden eller MR:er
-utförs av smoke-kommandot. Målversionen 3.18.0 rapporteras från skanningsdatabasen.
+Each `smoke` invocation creates a new test repository under
+`.lab/smoke-runs/<id>/`, saving build, SBOM and scan logs alongside `report.json`.
+The fixture contains two JUnit tests and the deliberately old test dependency
+commons-lang3 3.12.0. The scan must detect **CVE-2025-48924**.
 
-När beroenden och Trivy-databasen är cachade kan samma test köras utan nätverk:
+`completed_with_findings` means the test pipeline works, **not** that the repository
+is secure. The smoke command performs no upgrades, approvals or merge requests.
+The target version, 3.18.0, comes from the vulnerability database.
+
+Once dependencies and the Trivy database are cached, repeat the test without
+network access:
 
 ```sh
 ./target/release/upgrade-lab smoke
 ```
 
-Nätverket nekas då av Seatbelt. Bygget kör Maven offline. CycloneDX-pluginen
-kräver Mavens online-läge även med varm cache, så den startas utan `-o`, men
-sandboxens nätverksförbud gäller fortfarande. Saknad cache ger fel, inte fallback
-till nätåtkomst. Trivy använder då befintlig databas utan uppdatering.
+Seatbelt then denies network access. The build runs Maven offline. The CycloneDX
+plugin requires Maven's online mode even with a warm cache, so it starts without
+`-o`, but the sandbox still blocks networking. Missing cache entries cause failure,
+not a fallback to network access. Trivy uses its existing database without updating it.
 
-**Verifierat på den här maskinen:** installation av alla tre riktiga arkiv,
-versionskontroller, två godkända Java-tester, CycloneDX 1.6-SBOM, ett verkligt
-Trivy-fynd och därefter en komplett upprepning med nätverket avstängt.
+**Verified on the development machine:** installation of all three real archives,
+version checks, two passing Java tests, a CycloneDX 1.6 SBOM, a real Trivy finding
+and a complete repeat with networking disabled.
 
-## Samlad CVE-status över 20 repon
+## Central CVE status across 20 repositories
 
-Skapa nya, separata testrepon. Befintliga lokala repon i `.lab/repos/` lämnas
-orörda. Alla 20 nya repon har samma avsiktligt gamla beroende och två Java-tester;
-de representerar ännu inte olika verksamhetstjänster eller individuella felscenarier.
+Create separate test repositories. Existing local repositories in `.lab/repos/`
+are left untouched. All 20 new repositories contain the same deliberately old
+dependency and two Java tests; they do not yet represent distinct business
+services or individual failure scenarios.
 
 ```sh
 ./target/release/upgrade-lab repos init-examples
-./target/release/upgrade-lab scan --config .lab/repositories.json --workers 4 --network
+./target/release/upgrade-lab scan --config factory.yaml --network
 ./target/release/upgrade-lab status
 ./target/release/upgrade-lab status --repo order-service --json
 ./target/release/upgrade-lab status --cve CVE-2025-48924 --json
 ```
 
-`init-examples` skapar `.lab/rust-repos/` och `.lab/repositories.json`. Befintliga
-mappar och en befintlig konfigurationsfil skrivs inte över. Om kommandot avbryts
-mitt i initiering kan ofullständiga exempel behöva återskapas manuellt.
-Ändra konfigurationen för egna lokala Git-repon och brancher:
+`init-examples` creates `.lab/rust-repos/` and a legacy JSON repository list in
+`.lab/repositories.json`; it does not overwrite `factory.yaml`. Existing directories
+and configuration files are retained. Interrupted initialisation may require
+manual cleanup of incomplete examples.
 
-```json
-{
-  "repositories": [
-    {"name":"order-service", "path":".lab/rust-repos/order-service", "branches":["main","develop"]}
-  ]
-}
+Edit the repository section of the full factory file to select your local sources:
+
+```yaml
+repositories:
+  - name: order-service
+    path: .lab/rust-repos/order-service
+    scan_branches: [develop, main]
 ```
 
-Sökvägar är relativa aktuell arbetskatalog, inte konfigurationsfilens mapp. `..`
-avvisas. Namn+branch är inventariets identitet; samma identitet kan inte senare
-peka på en annan lokal sökväg. Brancher stöds för närvarande som main/develop.
-Ingen kloning från fjärrserver ingår ännu.
+The example factory scans two branches in each of 20 repositories: 40 jobs.
+YAML paths and application state are anchored to the factory file's directory;
+run other CLI commands there to use the same `.lab` state. `..` is rejected.
+Repository name plus branch forms the inventory identity; an existing identity
+cannot later point to another local path. Current scans support `main`/`develop`;
+staging promotion and remote checkout remain planned.
 
-### Körning och resultat
+Legacy JSON lists are still accepted with `scan --config .lab/repositories.json`;
+those paths remain relative to the caller's working directory.
 
-- Max åtta samtidiga jobb (standard fyra).
-- Endast branchens exakta, committade Git-snapshot skannas; lokala ändringar och
-  otrackade filer följer inte med. Källrepot lämnas orört.
-- Git och uppackning körs också under Seatbelt. Apple Git/Xcode CommandLineTools
-  behöver finnas; Rust-integrerad Git eller medlevererad Git återstår.
-- Bygg/test, CycloneDX och Trivy körs i jobbets separata skrivbara katalog.
-- Databas: `.lab/scans.sqlite`, med historik per repo, branch och commit.
-- Rapport, källsnapshot, SBOM och loggar: `.lab/scans/<id>/`.
-- `scan` skriver ett JSON-objekt med `runs` och `infrastructure_errors` till stdout;
-  framsteg går till stderr. Exitkod 1 betyder att något jobb misslyckats.
-- SBOM lagras centralt endast efter en fullständigt lyckad skanning. Misslyckad
-  körnings partiella artefakter kan finnas i jobbkatalogen, men ersätter inte
-  tidigare verifierade inventarieposter.
+### Execution and results
 
-Utan `--network` körs nätverksnekat med befintliga cacher, precis som smoke-testet.
-Kör först en online-smoke på en tom installation för att värma beroenden/databas.
-Ingen scannerdata skickas upp som en rapporttjänst, men nätverksaktiverade verktyg
-kan kontakta sina beroende-/databaskällor. Jobben ska inte få produktionshemligheter.
+- Up to eight concurrent jobs, with four by default.
+- Only the branch's exact committed Git snapshot is scanned. Local changes and
+  untracked files are excluded; the source repository is left untouched.
+- Git and extraction also run under Seatbelt. Apple Git/Xcode Command Line Tools
+  must be available; Rust-integrated or bundled Git remains future work.
+- Build/tests, CycloneDX and Trivy run in the job's own writable directory.
+- Database: `.lab/scans.sqlite`, retaining history by repository, branch and commit.
+- Reports, source snapshots, SBOMs and logs: `.lab/scans/<id>/`.
+- `scan` writes a JSON object containing `runs` and `infrastructure_errors` to
+  stdout; progress goes to stderr. Exit code 1 means at least one job failed.
+- An SBOM enters the central source inventory only after a fully successful scan.
+  Partial artefacts from failed runs may remain in the job directory, but do not
+  replace previously verified inventory entries.
 
-`status` visar tabell med severity-antal och senaste lyckade commit. `--json` ger
-fulla fynd, tidsstämplar, incidenter och loggsökvägar. `--repo` filtrerar repo;
-`--cve` filtrerar fyndlistan men repo-tabellens totalsiffror gäller fortfarande alla
-fynd för valda repon. `--max-age-seconds` styr färskhetsgränsen (standard ett dygn).
+Without `--network`, jobs use existing caches with networking denied, just like the
+smoke test. On a fresh installation, run an online smoke test first to populate
+dependencies and the database. Scan results are not uploaded to a reporting
+service, but network-enabled tools may contact their dependency/database sources.
+Jobs must not receive production secrets.
 
-**Säker statusmodell:**
-- Aldrig lyckad skanning: severity-antal är okända (`—`/null), inte noll.
-- Misslyckad eller pågående senaste skanning: senaste lyckade fynd visas som STALE.
-- Äldre än färskhetsgränsen: STALE även om senaste körningen lyckades.
-- Lyckad skanning kan fortfarande ha CVE:er. Den betyder inte ”säker”.
-- Färskhet gäller insamlingstid; den garanterar inte att branch-head eller
-  sårbarhetsdatabasen är oförändrad/aktuell. Scanner/databasmetadata sparas där den
-  finns; offline-läge använder uttryckligen cachad databas.
+`status` displays severity counts and the last successfully scanned commit.
+`--json` includes full findings, timestamps, incidents and log paths. `--repo`
+filters repositories. `--cve` filters the findings list; repository totals still
+cover all findings for the selected repositories. `--max-age-seconds` controls the
+freshness threshold, which defaults to one day.
 
-### När skanning misslyckas
+**Conservative status model:**
 
-Fel innehåller steg (`source`, `build`, `sbom`, `vulnerability_scan`), kategori,
-meddelande och loggsökväg. Kategorisering bygger delvis på loggtext och är
-vägledande, inte säker diagnos. Endast kända tillfälliga nätfel med aktiverat
-nätverk får automatiska retries: högst två extra försök, med 1/2 sekunders väntan.
-`--retries 0` stänger av dem. Behörighetsfel, sandboxfel, byggfel, timeout och
-saknad cache leder inte till automatiskt kringgående eller kodändringar.
+- No successful scan: severity counts are unknown (`—`/null), not zero.
+- Latest scan failed or is running: the last successful findings are marked STALE.
+- Older than the freshness threshold: STALE even if the latest run succeeded.
+- A successful scan may still contain CVEs. It does not mean “secure”.
+- Freshness describes collection time. It does not guarantee that branch HEAD or
+  the vulnerability database is unchanged or current. Scanner/database metadata
+  is saved where available; offline mode explicitly uses a cached database.
 
-Efter slutligt fel skapas/uppdateras en **lokal teknisk incident** per
-repo/branch/felkategori. En ny lyckad skanning löser äldre tekniska incidenter;
-själva CVE:erna försvinner inte om de fortfarande finns i skanningen. Loggar från
-varje faktiskt försök sparas. Förlorad databasåtkomst rapporteras som separat
-infrastrukturfel, inte framgång. Avbrutna processer kan lämna `running`-poster;
-automatisk återhämtning av sådana jobb återstår.
+### When scanning fails
 
-Inga GitLab-ärenden eller agentjobb skapas ännu. Det här är avsiktligt: först
-spårbara, kontrollerade fel utan agent. Ingen gammal SBOM återskannas automatiskt
-som fallback och inget misslyckat jobb presenteras som en ny lyckad skanning.
+Failures include the stage (`source`, `build`, `sbom`, `vulnerability_scan`),
+category, message and log path. Classification partly relies on log text and is
+advisory, not a definitive diagnosis.
 
-Exportera alla lyckade repo/commit-SBOM:er i ett centralt inventarium:
+Only recognised transient network failures, with networking enabled, receive
+automatic retries: at most two additional attempts, with delays of one and two
+seconds. `--retries 0` disables retries. Authentication, sandbox, build and timeout
+failures, or missing caches, never trigger automatic bypasses or code changes.
+
+After a final failure, a **local technical incident** is created or updated for
+the repository/branch/failure category. A new successful scan resolves older
+technical incidents; CVEs remain if they are still present in the scan. Logs are
+saved for each actual attempt. Database failures are reported separately as
+infrastructure failures, not as success. Interrupted processes may leave `running`
+records; automatic recovery remains to be implemented.
+
+No GitLab issues or agent jobs are created yet. This is intentional: establish
+traceable, controlled failures first. An old SBOM is not automatically rescanned
+as a fallback, and a failed job is never presented as a new successful scan.
+
+Export all successful repository/commit SBOMs to a central inventory:
 
 ```sh
 ./target/release/upgrade-lab inventory > .lab/central-inventory.json
 ```
 
-Exporten innehåller original-CycloneDX per snapshot med proveniens; en enda
-sammanfogad CycloneDX-export är ännu inte portad till Rust. Det är källinventarium,
-inte inventarium över vad som faktiskt är driftsatt.
+The export retains the original CycloneDX document and provenance per snapshot.
+A single merged CycloneDX export has not yet been ported to Rust. This is a source
+inventory, not an inventory of what is actually deployed. Candidate snapshots are
+kept separately, as described below.
 
-## Åtgärdskö: Critical → larm → godkännande → fix
+## Remediation queue: Critical → alert → approval → fix
 
-Följande kökommandon lagrar beslut och visar spärrar. De startar inga fixar.
-Versionsbyten kan därefter köras uttryckligen med `factory run`, se nedan.
+These queue commands record decisions and expose blockers. They do not start
+fixes. Version changes can subsequently be run explicitly with `factory run`.
 
 ```sh
 ./target/release/upgrade-lab queue refresh
@@ -199,74 +250,79 @@ Versionsbyten kan därefter köras uttryckligen med `factory run`, se nedan.
 ./target/release/upgrade-lab queue audit
 ```
 
-Efter en lyckad skanning uppdateras kön automatiskt. `refresh` fyller även kön
-från tidigare sparade resultat utan en ny skanning. Befintliga förslag återanvänds
-när innehållet är oförändrat. Våra 20 exempel har var sitt Medium-fynd och får ett
-versionsförslag till 3.18.0 — **ännu inget godkännande**.
+The queue updates automatically after a successful scan. `refresh` also populates
+it from previously saved results without rescanning. Unchanged proposals are
+reused. Each of the 20 examples has one Medium finding and receives an upgrade
+proposal to 3.18.0 — **not an automatic approval**.
 
-- Critical ger terminal-larm och en auditpost, även när ingen fixversion finns.
-  `alerts` visar alla aktuella Critical-fynd, även tydligt markerat inaktuella.
-  Larmhändelser dedupliceras per repo/branch/commit/CVE/paket/version. Inget
-  e-post-, Slack- eller annat push-larm är anslutet ännu.
-- Övriga fynd samlas för planerad hantering.
-- Ett automatiskt versionsförslag skapas endast när skannern anger en enda
-  explicit fixversion. Annars finns fyndet kvar i status/alerts för manuellt
-  åtgärdsval; fabriken gissar inte version eller lösning.
+- Critical findings produce a terminal alert and an audit entry, even if no fixed
+  version is available. `alerts` includes all current Critical findings, clearly
+  marking stale data. Alert events are deduplicated per repository, branch,
+  commit, CVE, package and version. Email, Slack and other push notifications are
+  not connected yet.
+- Other findings are collected for planned remediation.
+- An automatic version proposal is created only when the scanner reports one
+  explicit fixed version. Otherwise the finding remains in status/alerts for a
+  manual decision. The factory does not guess a version or a solution.
 
-### Välj åtgärd och mandat
+### Choose the action and authorised scope
 
-Ett förslag binds till repo, branch, exakt skannad commit, CVE, paket/version,
-severity, vald lösning, kodändringsmandat och verifieringskrav. Hela innehållet
-har ett SHA-256-ID. Tillgängliga lösningstyper i beslutsmodellen:
+A proposal is bound to the repository, branch, exact scanned commit, CVE,
+package/version, severity, selected solution, permission to change code and
+verification requirements. Its complete contents have a SHA-256 ID.
 
-- `upgrade`: versionsbyte, med eller utan explicit kodändringsmandat.
-- `adapt_code`: anpassning av koden enligt beskrivet mandat.
-- `replace`: ersätt beroendet; ange även `replacement`.
-- `remove`: ta bort beroendet och anpassa kod.
-- `mitigate`: tillfällig skyddsåtgärd med uttryckligt mandat.
+The decision model supports these action types:
 
-Detta är **beskrivningar av godkända uppdrag**, inte färdiga implementationsrecept.
-Riskacceptans avvisas tills ägare/utgångstid och uppföljning är implementerade.
+- `upgrade`: change a version, with or without explicit permission to adapt code.
+- `adapt_code`: adapt the code within the stated scope.
+- `replace`: replace the dependency; also specify `replacement`.
+- `remove`: remove the dependency and adapt the code.
+- `mitigate`: apply a temporary protective measure within an explicit scope.
 
-För att välja en annan lösning: kopiera `proposal`-objektet för rätt rad från
-`queue list --json` till en fil, beskriv åtgärden och skicka in den:
+These describe **authorised work**, not ready-made implementation recipes. Risk
+acceptance is rejected until ownership, expiry and follow-up controls exist.
+
+To choose a different solution, copy the relevant row's `proposal` object from
+`queue list --json` into a file, describe the action and submit it:
 
 ```sh
 ./target/release/upgrade-lab queue propose --file .lab/proposal.json --by Tobias
 ```
 
-Behåll fyndets identitet och observerade värden. För `replace`/`adapt_code`/`remove`
-krävs `code_changes: true` och verifieringskravet `code_review`. Alla förslag måste
-kräva `build`, `tests`, `sbom` och `security_scan`. Använd `evidence_fixed_version`
-för skannerns oförändrade fixversionssträng (även tom sträng om fix saknas), särskilt
-om din egen målversion skiljer sig från skannerns förslag. Utan det fältet förutsätts
-ett versionsförslags målversion vara den fixversion skannern rapporterade.
+Retain the finding's identity and observed values. `replace`, `adapt_code` and
+`remove` require `code_changes: true` and `code_review` verification. All proposals
+must require `build`, `tests`, `sbom` and `security_scan`.
 
-`main` tillåter normalt bara versionsbyten. Kod-/andra ändringar måste gå mot ett
-**separat skannat develop-underlag**, eller ha `hotfix_exception: true` för ett
-Critical-fynd. Undantaget ingår i det innehåll du godkänner; det beviljas aldrig
-automatiskt. Ett byte av målbranch kräver ett eget förslag med den branchens fynd
-så att vi inte låtsas att main och develop har samma kod.
+Use `evidence_fixed_version` for the scanner's unchanged fixed-version string
+(including an empty string if no fix is available), particularly when your chosen
+target differs from the scanner's proposal. Without that field, a version
+proposal's target is assumed to be the fixed version reported by the scanner.
 
-Ändra inte ett gammalt förslag i databasen. Skapa ett nytt med `supersedes` satt
-till det gamla fullständiga ID:t. Det blockerar tidigare godkännanden av det gamla
-mandatet och kräver ett nytt beslut. En redan godkänd batch behöver också återkallas
-innan samma paket får en annan aktiv åtgärd/tidpunkt.
+`main` normally permits version changes only. Code or other changes require
+**separately scanned develop evidence**, or `hotfix_exception: true` for a Critical
+finding. The exception forms part of the content you approve; it is never granted
+automatically. Changing the target branch requires a separate proposal based on
+that branch's findings rather than assuming `main` and `develop` contain the same code.
 
-### Gemensamt godkännande och tidsfönster
+Do not edit an old proposal in the database. Create a new one with `supersedes`
+set to the old proposal's full ID. This blocks previous approvals of the old scope
+and requires a new decision. An already approved batch must also be revoked before
+the same package can receive another active action or schedule.
 
-Använd fullständiga ID:n från kön. Välj alla ännu obeslutade, giltiga förslag eller
-en kommaseparerad lista med `--ids ID,ID`. Konflikter/alternativ för samma fynd
-måste väljas uttryckligen; en batch med motstridiga uppdrag avvisas i sin helhet.
+### Batch approval and execution windows
 
-Critical kan godkännas för omedelbar hantering (gäller en timme):
+Use full proposal IDs. Select all valid proposals awaiting a decision, or provide
+a comma-separated list with `--ids ID,ID`. Alternative actions for the same finding
+must be selected explicitly; a conflicting batch is rejected in its entirety.
+
+Critical findings can be approved for immediate handling, valid for one hour:
 
 ```sh
-./target/release/upgrade-lab queue approve --ids FULLSTANDIGT_ID --by Tobias --now
+./target/release/upgrade-lab queue approve --ids FULL_PROPOSAL_ID --by Tobias --now
 ```
 
-För övriga väljs ett planerat fönster med Unix-tid i **sekunder** (UTC-tidsstämplar,
-inte lokal klocktext). Ersätt platshållarna med verkliga framtida tider:
+For other findings, select a planned window using Unix timestamps in **seconds**,
+not local clock text. Replace the placeholders with actual future timestamps:
 
 ```sh
 ./target/release/upgrade-lab queue approve --all --by Tobias \
@@ -274,150 +330,163 @@ inte lokal klocktext). Ersätt platshållarna med verkliga framtida tider:
 ./target/release/upgrade-lab queue ready
 ```
 
-`ready` visar samtliga batcher och blockerande orsaker, inte bara körklara jobb.
-`eligible_by_scan_evidence` kräver att tidsfönstret är öppet, godkännandet inte är
-utgånget/återkallat och att senaste skanning lyckades för samma commit/fynd/severity/
-fixversionsunderlag inom 24 timmar. Ändrat eller saknat underlag stoppar batchen.
-Flera repon godkänns i **en atomisk batch**, inte genom enskilda repo-godkännanden.
+`ready` displays all batches and their blockers, not only eligible jobs.
+`eligible_by_scan_evidence` requires an open execution window, an unexpired and
+unrevoked approval, and a successful latest scan for the same commit, finding,
+severity and fixed-version evidence within 24 hours. Changed or missing evidence
+blocks the batch. Multiple repositories are approved in **one atomic batch**, not
+through separate per-repository approvals.
 
-`ready` granskar databasens underlag, inte Git-head i realtid. Exekveraren gör
-ytterligare Git-/diffkontroller och en atomisk claim. Redan claimade batcher
-blockeras för återkörning och visas med `execution_started: true`.
-Godkännandet binds också till mandatpolicy och den inbyggda verktygskatalogens hash;
-ändrad katalog eller gamla obundna beslut kräver nytt godkännande.
-`merge_authorized` är alltid false. Ett godkänt förslag stänger inte CVE-fyndet.
+`ready` checks database evidence, not live Git HEAD. The executor performs further
+Git/diff checks and an atomic claim. Already claimed batches cannot be replayed
+and are shown with `execution_started: true`.
 
-Återkalla ett godkännande med motivering:
+Approval is also bound to the scope policy and the built-in tool catalogue hash.
+A changed catalogue or an older unbound decision requires new approval.
+`merge_authorized` is always false. Approval does not close a CVE finding.
+
+Revoke an approval with a reason:
 
 ```sh
-./target/release/upgrade-lab queue revoke --batch FULLSTANDIGT_BATCH_ID \
-  --by Tobias --reason "Ändrad plan eller åtgärd"
+./target/release/upgrade-lab queue revoke --batch FULL_BATCH_ID \
+  --by Tobias --reason "Changed plan or remediation approach"
 ```
 
-Förslag, batchbeslut, återkallelser och auditposter ligger i `.lab/scans.sqlite`.
-Databastriggers skyddar mot normal ändring/radering av beslutshistorik. Detta är
-**lokal spårbarhet, inte manipulationssäker revision**: `--by` är inte autentisering,
-offline DB-administratörer kan ändra filen och ingen signerad extern logg finns.
+Proposals, batch decisions, revocations and audit entries live in
+`.lab/scans.sqlite`. Database triggers prevent ordinary updates/deletions of
+decision history. This provides **local traceability, not tamper-proof auditing**:
+`--by` is not authentication, database administrators can modify the file, and no
+signed external audit log exists.
 
-## Verkställ en godkänd batch
+## Execute an approved batch
 
 ```sh
-./target/release/upgrade-lab factory run --batch FULLSTANDIGT_BATCH_ID --workers 2 --network
+./target/release/upgrade-lab factory run --batch FULL_BATCH_ID --workers 2 --network
 ./target/release/upgrade-lab factory status
 ```
 
-Detta kräver ett uttryckligt godkännande inom öppet tidsfönster. Ingen schemaläggare
-startar batchen automatiskt ännu. Utan `--network` används befintliga cacher och
-nätverket nekas. Max fyra samtidiga repogrupper. Ingen agent används.
+Execution requires explicit approval within an open window. No scheduler starts
+the batch automatically yet. Without `--network`, existing caches are used and
+networking is denied. Up to four repository groups run concurrently. No agent is used.
 
-Den första exekveraren stöder bara `upgrade` med `code_changes: false`, en vanlig
-POM och explicita direkta beroendeversioner. Kodanpassning, ersättning/borttagning,
-properties, BOM/parent, transitiva och multimoduluppgraderingar lämnas till manuell
-hantering — mandatet breddas aldrig automatiskt. Ett unsupported kodmandat avvisas
-innan claim; unsupported POM-struktur upptäcks per repo som `manual_required`.
+The first executor supports only `upgrade` with `code_changes: false`, a regular
+POM and explicit direct dependency versions. Code adaptation, replacement/removal,
+properties, BOM/parent, transitive and multi-module upgrades require manual
+handling. The authorised scope is never expanded automatically. Unsupported code
+permissions are rejected before claiming the batch; unsupported POM structures
+are reported per repository as `manual_required`.
 
-Kontroller och resultat:
+Checks and results:
 
-- Godkännande, återkallelse, giltighet, scan-underlag och verktygskatalog kontrolleras.
-- Atomisk batch-claim och lås per registrerad reposökväg förhindrar dubbla körningar.
-- Faktisk målbranch-head måste fortfarande motsvara den godkända committen.
-- En **fristående Git-klon** skapas per repo/målbranch under `.lab/executions/`.
-  Endast klonens kandidatbranch ändras. Originalrepo och dess brancher är read-only.
-- Enbart exakta godkända versionstexter i `pom.xml` ändras. Formatering och övrigt
-  innehåll bevaras. Kandidatens `.git` skyddas read-only under Maven/Trivy-körning.
-- Bygg/test, CycloneDX och Trivy körs sandboxat. Krävda tester måste köras.
-- Avsedda versioner måste finnas i SBOM. Kvarvarande fynd på uppgraderade paket
-  och nya/eskalerade HIGH/CRITICAL-fynd stoppar kandidaten.
-- Diff, filmoder, Git-head och exakt committad POM kontrolleras igen. Godkännandet
-  och source-head kontrolleras mellan steg och efter verifiering.
-- Framgång ger `verified_candidate`; ytterligare transitiva beroendeförändringar
-  ger `awaiting_dependency_review`. Båda är lokala kandidater, inte merge-beslut.
-- Varje grupp får loggar och `report.json`. Fel stoppar inte automatiskt övriga
-  giltiga grupper. Slutrapporten visar varje resultat.
-- Kandidat-SBOM sparas separat och exporteras som `candidate_snapshots` med roll,
-  målbranch, commit och verifieringsstatus. Den ersätter inte source-branch-SBOM.
+- Approval, revocation, validity, scan evidence and the tool catalogue are checked.
+- An atomic batch claim and locks per registered repository path prevent duplicate execution.
+- The actual target branch HEAD must still match the approved commit.
+- An **independent Git clone** is created for each repository/target branch under
+  `.lab/executions/`. Only the clone's candidate branch changes. The original
+  repository and its branches remain read-only.
+- Only the exact approved version text in `pom.xml` changes. Formatting and other
+  content are preserved. The candidate's `.git` is protected as read-only during
+  Maven/Trivy execution.
+- Build/tests, CycloneDX and Trivy run sandboxed. Required tests must run.
+- Approved target versions must appear in the SBOM. Remaining findings on upgraded
+  packages and new/escalated HIGH/CRITICAL findings block the candidate.
+- Diffs, file modes, Git HEAD and the exact committed POM are checked again.
+  Approval and source HEAD are checked between stages and after verification.
+- Success yields `verified_candidate`; additional transitive dependency changes
+  yield `awaiting_dependency_review`. Both are local candidates, not merge decisions.
+- Each group receives logs and `report.json`. A failure does not automatically
+  block other valid groups. The final report includes every result.
+- Candidate SBOMs are stored separately and exported as `candidate_snapshots`, with
+  role, target branch, commit and verification status. They do not replace source
+  branch SBOMs.
 
-Det görs **ingen push, MR eller merge**. Inga CVE:er stängs på målbranchen bara för
-att en kandidat blivit grön. Kandidatens egen Git-katalog/branch/commit anges i
-`factory status`; originalets `git branch` visar därför inte kandidatbranchen.
+There is **no push, merge request or merge**. CVEs are not closed on the target
+branch simply because a candidate passes verification. `factory status` reports
+the candidate's own Git directory, branch and commit. The original repository's
+`git branch` therefore does not show the candidate branch.
 
-En batch kan claimas endast en gång. Efter fel krävs ett nytt kontrollerat beslut;
-ingen automatisk replay sker. En krasch efter claim behåller `running` och lås för
-manuell utredning. Automatisk återhämtning, avbrytning och lease-hantering återstår.
-Återkallelse stoppar vid nästa kontroll, inte omedelbart mitt i en pågående process.
+A batch can be claimed only once. Failure requires a new controlled decision;
+there is no automatic replay. A crash after claiming retains `running` and the
+locks for manual investigation. Automatic recovery, cancellation and lease
+management remain future work. Revocation stops work at the next check, not
+immediately in the middle of a running process.
 
-**Testat:** 37 standardtester samt ett separat verkligt integrationstest som
-uppgraderar ett temporärt testrepo från commons-lang3 3.12.0 till 3.18.0, bygger,
-testar, producerar SBOM och skannar med Trivy. Det kontrollerar att originalets
-Git-head/POM är oförändrade, att målbranchens CVE fortfarande finns i status och
-att samma batch inte kan köras igen. Integrationstestet kräver bootstrap/cachad DB:
+**Tested:** 37 standard tests and a separate real integration test that upgrades a
+temporary repository from commons-lang3 3.12.0 to 3.18.0, builds it, runs tests,
+produces an SBOM and scans it with Trivy. It checks that the original Git HEAD/POM
+remain unchanged, that the target branch's CVE remains in status, and that the
+batch cannot be replayed. The integration test requires bootstrapped tools and a
+cached database:
 
 ```sh
 cargo test execution::tests::real_approved_upgrade_does_not_modify_original_or_close_main_finding -- --ignored --nocapture
 ```
 
-Det testgodkännandet finns endast i en temporär databas och godkänner inte dina
-20 väntande åtgärder. Implementationens kvarvarande säkerhetsbegränsningar nedan
-(gemensam cache, processgrupper och avsaknad av hårda kvoter) gäller även fabriken.
+That test approval exists only in a temporary database. It does not approve your
+20 queued proposals. The remaining security limitations below, including shared
+caches, process groups and the lack of hard quotas, also apply to the factory.
 
-## Kör ett CLI-kommando sandboxat
+## Run a CLI command in the sandbox
 
 ```sh
 ./target/release/upgrade-lab sandbox run -- /bin/echo sandbox-ok
 ./target/release/upgrade-lab sandbox run --timeout 5 -- /bin/sh -c 'while :; do :; done'
 ```
 
-Ge bara det aktuella jobbet nödvändiga sökvägar. Sökvägar måste finnas; de
-normaliseras innan profilen genereras:
+Grant only the paths required for the current job. Paths must exist and are
+normalised before the profile is generated:
 
 ```sh
 ./target/release/upgrade-lab sandbox run \
-  --read /absolut/sokvag/till/input \
-  --write /absolut/sokvag/till/jobb \
+  --read /absolute/path/to/input \
+  --write /absolute/path/to/job \
   --timeout 60 -- /bin/sh -c 'cat "$1/data.txt" > "$2/result.txt"' \
-  job /absolut/sokvag/till/input /absolut/sokvag/till/jobb
+  job /absolute/path/to/input /absolute/path/to/job
 ```
 
-Programmet måste anges med absolut sökväg. Själva programfilen blir läsbar och
-körbar, men inte automatiskt hela dess installationskatalog. Bibliotek och andra
-verktyg utanför systemets runtime måste tillåtas uttryckligen. Miljön är rensad;
-HOME och TMPDIR pekar på jobbets tillfälliga katalog. Godtyckliga värdvariabler som
-GitLab-token följer inte med. `tools run` nedan sätter en kontrollerad
-JDK/Maven-miljö utan att ärva värdens miljö.
+The executable must have an absolute path. Its file becomes readable and
+executable, but its whole installation directory is not automatically exposed.
+Libraries and tools outside the system runtime need explicit grants.
 
-Nätverk är avstängt. `--network` tillåter utgående trafik, **inte** en begränsad
-lista av domäner. Använd inte flaggan när ett jobb hanterar hemligheter.
+The inherited environment is cleared. HOME and TMPDIR point to the job's temporary
+directory. Arbitrary host variables, such as GitLab tokens, are not passed on.
+`tools run` sets a controlled JDK/Maven environment without inheriting the host's
+configuration.
 
-Vanliga kommandon returnerar sin exitkod; timeout ger 124. Terminalutskrift
-begränsas till 64 KiB per ström; de tillfälliga loggfilerna raderas efteråt.
+Networking is disabled. `--network` permits outbound traffic, **not** a restricted
+list of domains. Do not use this flag for jobs handling secrets.
 
-## Installera verktyg i appens egen katalog
+Commands return their exit code; a timeout returns 124. Terminal output is limited
+to 64 KiB per stream. Temporary log files are removed afterwards.
 
-Välj officiella arkiv för **macOS och rätt CPU-arkitektur**. Ta SHA-256 från en
-betrodd källa; en hash från samma komprometterade källa skyddar inte mot
-leverantörsangrepp. Inga påhittade kontrollsummor eller automatiskt valda versioner
-används. Du kan använda den granskbara katalogen ovan eller ange egna arkiv.
-Ersätt platshållarna nedan med verkliga värden:
+## Install tools in the application's own directory
+
+Select official archives for **macOS and the correct CPU architecture**. Obtain
+SHA-256 from a trusted source. A hash from the same compromised source does not
+protect against a supply-chain attack. No fabricated checksums or automatically
+selected versions are used. Use the reviewable catalogue above or supply your own
+archives. Replace the placeholders with actual values:
 
 ```sh
 ./target/release/upgrade-lab tools install jdk JDK_VERSION \
-  --archive /absolut/sokvag/jdk.tar.gz --sha256 BETRODD_SHA256
+  --archive /absolute/path/jdk.tar.gz --sha256 TRUSTED_SHA256
 ./target/release/upgrade-lab tools install maven MAVEN_VERSION \
-  --url https://officiell-server/maven.tar.gz --sha256 BETRODD_SHA256
+  --url https://official-server/maven.tar.gz --sha256 TRUSTED_SHA256
 ./target/release/upgrade-lab tools install trivy TRIVY_VERSION \
-  --archive /absolut/sokvag/trivy.tar.gz --sha256 BETRODD_SHA256
+  --archive /absolute/path/trivy.tar.gz --sha256 TRUSTED_SHA256
 ```
 
-Arkivet kopieras till staging (eller hämtas med sandboxad system-curl), verifieras
-med SHA-256 och packas upp med sandboxad system-tar. Absoluta sökvägar, `..`,
-externa/absoluta symlänkar och specialfiler avvisas. Uppackning har inget nätverk.
-Befintliga installationer skrivs inte över. Det förutsätter macOS systemverktyg
-`/usr/bin/curl` och `/usr/bin/tar`, inte Homebrew-versioner.
+The archive is copied into staging, or downloaded using sandboxed system curl,
+verified with SHA-256 and extracted using sandboxed system tar. Absolute member
+paths, `..`, external/absolute symbolic links and special files are rejected.
+Extraction has no network access. Existing installations are not overwritten.
+This uses macOS system tools `/usr/bin/curl` and `/usr/bin/tar`, not Homebrew versions.
 
-Verktyg ligger i `.lab/tools/<kind>/<version>-<os>-<arch>/`. Ett installationskvitto
-sparar versionsetikett och arkivhash. Etiketten bevisar inte verktygets verkliga
-version: kontrollera `--version` separat. Installerade filer är inte signerade eller
-omhashade vid varje körning. Katalogen ska endast ändras av den betrodda appen.
+Tools live in `.lab/tools/<kind>/<version>-<os>-<arch>/`. An installation receipt
+records the version label and archive hash. The label does not prove the tool's
+actual version: check its version command separately. Installed files are neither
+signed nor re-hashed on every invocation. Only the trusted application should
+modify the installation directory.
 
 ```sh
 ./target/release/upgrade-lab tools run jdk JDK_VERSION -- -version
@@ -425,81 +494,230 @@ omhashade vid varje körning. Katalogen ska endast ändras av den betrodda appen
 ./target/release/upgrade-lab tools run trivy TRIVY_VERSION -- --version
 ```
 
-Maven får bara läsåtkomst till sin egen och JDK:ns installation. Kontrollerade
-JAVA_HOME/PATH sätts och beroendecachen pekar på `.lab/cache/maven/repository`.
-Trivy får en egen `.lab/cache/trivy`. Nätverk är fortfarande avstängt om det inte
-uttryckligen aktiveras. För ett betrott testrepo:
+Maven receives read-only access to its own installation and the JDK. Controlled
+JAVA_HOME/PATH values are set, and the dependency cache points to
+`.lab/cache/maven/repository`. Trivy uses `.lab/cache/trivy`. Networking remains
+disabled unless explicitly enabled. For a trusted test repository:
 
 ```sh
 ./target/release/upgrade-lab tools run maven MAVEN_VERSION --jdk JDK_VERSION \
-  --repo /absolut/sokvag/till/testrepo --network -- -B clean verify
+  --repo /absolute/path/to/test-repo --network -- -B clean verify
 ```
 
-Det ger skrivåtkomst till **just den repokopian** och verktygscachen, inte till
-hemkatalogen. Välj en separat arbetskopia, inte ett repo med hemligheter. Appens
-övergripande datakatalog eller en förälder till tool-katalogen avvisas som repo.
-Nuvarande verktygskörning har 15 minuters timeout. För enbart versionskontroll
-behövs varken repo eller nätverk. Cache delas mellan jobb; jobbvis cacheisolering
-återstår. Ingen `~/.m2/settings.xml` eller privat registry-konfiguration ärvs.
+This grants write access to **that repository copy** and the tool cache, not the
+home directory. Use a separate working copy, not a repository containing secrets.
+The application's overall data directory, or a parent of the tools directory, is
+rejected as a repository grant.
 
-Installationskedjan testas även med ett litet lokalt testarkiv och ett harmlöst
-testverktyg. Tar-arkiv stöds; inga pkg-installationer eller zip-installationsflöden
-ingår. Arkivlistan begränsas till 16 MiB, men total uppackad storlek har ännu ingen kvot.
+Tool execution currently has a 15-minute timeout. Version checks need neither a
+repository nor network access. Caches are shared between jobs; per-job cache
+isolation remains future work. Neither `~/.m2/settings.xml` nor private registry
+configuration is inherited.
 
-## Säkerhetsgränser
+The installation pipeline is also tested using a small local archive and a
+harmless fixture tool. Tar archives are supported; pkg and zip installation flows
+are not included. Archive listings are limited to 16 MiB, but the total extracted
+size does not yet have a quota.
 
-Det här är en tidig implementation, inte en säkerhetsgranskad byggplattform:
+## Security boundaries
 
-- Sandboxen är en OS-policy, inte en VM. Den bygger på macOS säkerhetsmekanismer.
-- Systemets runtime är läsbar. Filmetadata är generellt läsbar; det är inte en
-  garanti för att dölja filnamn eller maskininformation.
-- Alla filgrants är additiva. En skrivbar föräldrakatalog gör även dess barn
-  skrivbara; ge inte en bred grant och förvänta dig att en smalare read-grant
-  gör ett barn read-only. Hemkatalogen och filsystemroten ska inte exponeras.
-  En grant av `/` avvisas uttryckligen.
-- CPU/minne och loggfilsstorlek har ännu inte hårda kvoter. Visningsgränsen för
-  loggar begränsar inte förbrukat diskutrymme.
-- Timeout städar processgruppen, men är inte en garanti mot barnprocesser som
-  aktivt bryter sig ur gruppen. Starkare livscykelhantering återstår.
-- Varje kommando behöver fortfarande en korrekt, snäv uppsättning filgrants.
-- Seatbelt-gränssnittet är föråldrat och måste regressionstestas på stödda macOS.
-- **Linux-backenden är inte implementerad:** där vägrar programmet köra jobb.
-  Planerad backend är Bubblewrap + seccomp, enligt mönstret i Codex.
+This is an early implementation, not a security-audited build platform:
 
-## Arkitektur framåt
+- The sandbox is an OS policy, not a virtual machine. It relies on macOS security mechanisms.
+- The system runtime is readable. File metadata is generally readable; this does
+  not guarantee that filenames or machine information are hidden.
+- Ordinary read/write grants are additive: a writable parent also makes its
+  children writable. A narrower read grant alone does not make a child read-only.
+  The executor's explicit `.git` write-denial rules are a separate protection.
+  Do not expose the home directory or filesystem root. A grant for `/` is rejected.
+- CPU/memory usage and log file sizes do not yet have hard quotas. The display
+  limit on logs does not limit disk consumption.
+- Timeout handling terminates the process group, but does not guarantee the
+  termination of children that actively escape it. Stronger lifecycle management
+  remains future work.
+- Every command still needs an appropriate, narrow set of filesystem permissions.
+- The Seatbelt interface is deprecated and must be regression-tested on supported
+  macOS versions.
+- **The Linux backend is not implemented:** jobs are refused on Linux. The planned
+  backend is Bubblewrap plus seccomp, following the architecture used by Codex.
 
-```text
-Rust-app: API/UI, SQLite, GitLab, policy och godkännanden
-                 ↓
-       Tool manager + jobbhanterare
-                 ↓
-     Seatbelt (macOS) / Bubblewrap (Linux)
-                 ↓
-          Java/Maven och Trivy
+## Architecture and next steps
+
+The [layered overview](#architecture-overview) shows the system structure. The
+single workflow below shows how people and automation should work together.
+
+### Target workflow: authorise work, then approve the result
+
+**There are two different approvals:** permission to perform work on selected
+repositories, and manual approval of the finished changes. Permission to run an
+agent is not approval of whatever it produces.
+
+This is the **target workflow**, not a claim that every step exists today. Agent
+execution, the developer feedback loop, recorded final approval and GitLab delivery
+are still planned.
+
+```mermaid
+flowchart TB
+    Evidence["Scan and propose actions"] --> Start["1. Approve work for selected repos"]
+    Start --> Route{"Version-only change?"}
+    Route -->|Yes| Bump["Deterministic upgrade"]
+    Route -->|No| Agent["Approved agent works"]
+    Bump --> Verify["Automated verification"]
+    Agent --> Verify
+    Verify -->|Pass| Ready["Candidate / draft MR ready"]
+    Verify -->|Fail| Iterate["Agent / developer iteration"]
+    Ready --> Final{"2. Manual final approval"}
+    Final -->|Changes requested| Iterate
+    Iterate --> Verify
+    Final -->|Approved| Delivery["Controlled GitLab handover"]
 ```
 
-Nästa steg är GitLab-adapter för granskbara MR:er och felärenden, schemalagd körning
-samt kontrollerade recept/agentmandat för mer än direkta versionsbyten. Byggworkers
-behöver hårdare resurs-/cacheisolering
-innan godtycklig obetrodd kod kan hanteras.
-GitLab-token ska alltid hållas utanför byggjobben.
+The agent should complete as much work as possible before asking for attention.
+The operator reviews a finished candidate, not a stream of routine tool requests.
+A developer may then provide feedback, work with the agent or edit the candidate
+directly. Once the agent and any participating developer have finished, the exact
+result returns for manual final approval.
 
-Referensarkitektur studerad i `../codex/codex-rs/sandboxing/` och
-`../codex/codex-rs/linux-sandbox/`. Vår minimala Seatbelt-policy är egen kod;
-Codex hela implementation har inte kopierats eller integrerats.
+### 1. Approve the work for each selected repository
 
-## Licens
+The factory collects findings and proposes actions automatically. Simple version
+changes use the deterministic executor. Repositories needing code adaptation,
+dependency replacement or other non-trivial changes need explicit permission for
+an agent to perform that work.
+
+One batch decision can cover all or selected repositories, while preserving a
+separate scope for each repository: target branch, base commit, chosen action,
+permitted code/configuration/test changes, verification requirements and budgets.
+The operator can choose agent-led work or developer-assisted work; neither route
+requires approval of every individual command.
+
+- **Critical:** alert immediately → approve the selected action → start within the
+  approved immediate window. Do not wait for agent analysis before raising the alert.
+- **Other findings:** collect proposals → approve selected work → execute during
+  the planned window.
+- **No approval:** do not start a fix. A missing fix version must not hide a
+  Critical alert or cause the factory to invent an upgrade.
+
+An unsuccessful version bump must not silently grant an agent permission to
+change code. If that permission is missing, propose the wider scope and obtain a
+new work approval. `main` remains version-only by default; code changes require
+separately scanned `develop` evidence or an explicit Critical hotfix exception.
+
+### 2. Let the agent work within that mandate
+
+After approval, the coordinator claims the job, checks current evidence and Git
+HEAD, locks the repository and prepares an independent candidate. The agent works
+in the sandbox and may inspect code, edit permitted files, build, test and repair
+its own changes automatically within the approved scope and limits.
+
+Routine tool checks and bounded repair attempts are machine-controlled. Human
+intervention is needed when the agent is blocked, exhausts its budget or needs a
+materially different action, broader permissions or an expired/revoked approval.
+Those situations produce a clear handover or a new work proposal, not a silent
+policy change. The agent must not disable tests, weaken the sandbox or alter its
+own approval or audit records.
+
+Model-provider and GitLab credentials remain outside jobs in trusted gateways and
+adapters. The model gateway must enforce data-sharing policy and cost limits;
+a filesystem sandbox alone does not control which source code is sent to a model.
+
+### 3. Review a completed candidate and give feedback
+
+Before requesting attention, the factory runs independent checks and assembles a
+review package: exact diff, change summary, build/test results, SBOM changes,
+remaining/new findings and any known limitations.
+
+A developer is **optional, not a mandatory stop at every stage**. The normal path
+is an autonomous agent producing a reviewable result. If feedback or additional
+engineering is needed, the developer and agent can iterate on the candidate.
+Every new revision returns through automated verification. In-scope feedback does
+not need another execution approval; a changed solution or wider mandate does.
+
+A failed scan remains a failure, not a clean result. Failed or incomplete agent
+work retains its logs and findings for follow-up. Exhausted attempts result in a
+manual handover; there is no automatic risk acceptance.
+
+### 4. Manually approve the finished result
+
+Once the agent and any participating developer are satisfied, an operator manually
+approves the **specific verified candidate**, separately from the earlier work
+approval. The final approval must bind the candidate commit and its verification
+evidence, not just the repository name or the fact that an agent has finished.
+
+Further edits or review feedback invalidate that final approval. The revised
+candidate must be verified again and submitted for another manual final approval.
+The agent cannot approve its own result.
+
+The trusted GitLab adapter may prepare or update a draft MR automatically when
+the candidate is ready, so feedback can happen there without another administrative
+approval. Final approval applies to the reviewed revision; neither initial work
+approval nor a clean candidate implies automatic merge permission. MR/CI feedback
+can feed back into the same controlled iteration; new changes require renewed
+final approval. Only a successful scan of the resulting target-branch commit establishes
+that a finding is absent there. Candidate SBOMs remain separate from source-branch
+inventory, and deployment verification is a separate concern.
+
+### The factory orchestrates branch promotion
+
+The intended branch strategy is configured in `factory.yaml`:
+
+| Route | Base and promotion | Handover |
+|---|---|---|
+| Normal upgrade | Create `upgrade/<branch_id>` from `develop`; after final approval, merge approved repository MRs into `develop`, then promote to `stage`. | Once all selected repositories are staged and verified, transition their Jira issues to `ready-for-at-test`; the ordinary test/release process then governs `main`. |
+| Critical patch | Create the upgrade branch from `main`, verify through an isolated main-based staging ref, promote the patch to `main`, then backmerge to `develop`. | Preserve normal pipeline checks without dragging unrelated shared-stage changes into production. |
+
+The factory's job queue drives this repo by repo and step by step. It records
+MRs, commits, pipeline/deployment evidence and completed operations, retries only
+eligible failed steps, and never repeats a recorded successful merge blindly.
+The operator approves centrally; routine per-repository GitLab administration is
+not a separate manual task. Merge results must be checked before further promotion.
+
+Agents may handle code changes and general maintenance/framework/JDK upgrades,
+not only CVE-generated version proposals. Developer decisions belong **inside**
+the working loop, before final approval. When the agent and participating developer
+have finished, the exact candidate receives manual final approval.
+
+This orchestration, non-CVE intake, agent/developer integration, promotions and
+Jira handover are configuration contracts, not implemented adapters yet.
+
+### Implementation boundary and next steps
+
+| Available now | Still to implement |
+|---|---|
+| Factory YAML validation, effective-plan output and scan configuration | Applying the full definition to durable orchestration jobs |
+| Scan evidence, SBOM inventory and concise CVE status | Agent execution for non-trivial upgrades |
+| Immutable proposals and batch work approvals | Agent/developer feedback and candidate revision tracking |
+| Execution windows, revocation, claims and repository locks | Recorded manual final approval bound to candidate evidence |
+| Sandboxed direct version changes and candidate verification | GitLab MR/issue integration and approval-aware delivery |
+| Failure logs, bounded scan retries and audit history | Scheduling, recovery and stronger job/cache/resource isolation |
+
+The next implementation should follow this workflow: add the approved agent
+executor, retain a finished candidate for developer feedback, reverify revisions,
+then record manual final approval of the reviewed revision. Automate draft-MR
+preparation and routine handovers rather than adding approval gates for them. Keep the CLI status
+list as the main overview; a future API or web interface should expose the same
+workflow rather than introduce extra approval stages.
+
+The trusted Rust application owns policy, evidence and credentials. Jobs receive
+only their working copy and necessary tools. Linux sandbox support remains
+planned; see [Security boundaries](#security-boundaries) for the current limits.
+
+The reference architecture was studied in `../codex/codex-rs/sandboxing/` and
+`../codex/codex-rs/linux-sandbox/`. Our minimal Seatbelt policy is our own code;
+the full Codex implementation has not been copied or integrated.
+
+## Licence
 
 Copyright 2026 Tobias Martelius.
 
-Projektets egen kod och dokumentation är licensierad under
-[Apache License 2.0](LICENSE). Tredjepartsberoenden och hämtade verktyg omfattas
-av sina respektive licenser.
+The project's own code and documentation are licensed under the
+[Apache License 2.0](LICENSE.md). Third-party dependencies and downloaded tools remain
+subject to their respective licences.
 
-Programvaran tillhandahålls i befintligt skick utan garantier. Se särskilt
-licensens avsnitt 7–8 om garantifriskrivning och ansvarsbegränsning, med de
-undantag som följer av tillämplig lag. Detta är ingen garanti mot rättsliga krav.
+The software is provided as is, without warranties. See sections 7–8 of the
+licence for the warranty disclaimer and limitation of liability, subject to
+applicable law.
 
-Granska och testa genererade ändringar före merge eller driftsättning, använd
-backup och begränsade behörigheter. Skanning garanterar inte att alla sårbarheter
-hittas eller åtgärdas, och sandboxen ersätter inte en säkerhetsgranskning.
+Review and test generated changes before merging or deploying them. Use backups
+and restricted permissions. Scanning does not guarantee that every vulnerability
+will be found or fixed, and sandboxing does not replace a security review.
