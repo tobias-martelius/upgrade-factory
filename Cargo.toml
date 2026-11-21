@@ -1,0 +1,18 @@
+[package]
+name = "upgrade-lab"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Approval-driven dependency upgrades with native OS sandboxing"
+license = "UNLICENSED"
+publish = false
+
+[dependencies]
+sha2 = "0.10.9"
+serde_json = "1.0"
+rusqlite = { version = "0.32", features = ["bundled"] }
+roxmltree = "0.20"
+
+[[bin]]
+name = "upgrade-lab"
+path = "src/main.rs"

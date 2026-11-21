@@ -1,0 +1,30 @@
+{
+  "platform": "macos-aarch64",
+  "artifacts": [
+    {
+      "kind": "jdk",
+      "version": "21.0.13.1+2",
+      "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13.1%2B2/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.13.1_2.tar.gz",
+      "sha256": "48067f2b7c958ed104a9d8a5749be7d25220b0a356b4d2d1bcfaab3e16ad0b14",
+      "checksum_source": "https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=aarch64&image_type=jdk&os=mac",
+      "checksum_notes": "Pinned from publisher release metadata on 2026-11-20; signature not verified."
+    },
+    {
+      "kind": "maven",
+      "version": "3.9.9",
+      "url": "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.tar.gz",
+      "sha256": "7a9cdf674fc1703d6382f5f330b3d110ea1b512b51f1652846d9e4e8a588d766",
+      "checksum_source": "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.tar.gz.sha512",
+      "publisher_sha512": "a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b",
+      "checksum_notes": "Downloaded archive matched publisher SHA-512; SHA-256 derived locally from that archive."
+    },
+    {
+      "kind": "trivy",
+      "version": "0.76.2",
+      "url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_macOS-ARM64.tar.gz",
+      "sha256": "ae7ea358326960406b703c77b2ac490190797d80b306b5b50c2a27221da0a5b8",
+      "checksum_source": "https://api.github.com/repos/aquasecurity/trivy/releases/tags/v0.76.2",
+      "checksum_notes": "Pinned from GitHub release asset digest on 2026-11-20; Sigstore signature not verified."
+    }
+  ]
+}

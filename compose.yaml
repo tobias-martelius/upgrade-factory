@@ -1,0 +1,28 @@
+services:
+  lab:
+    build: .
+    ports:
+      - "127.0.0.1:${LAB_PORT:-8081}:8080"
+    init: true
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 4g
+    cpus: 4
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=2g,mode=1777
+    volumes:
+      - lab-data:/app/.lab
+      - maven-cache:/home/lab/.m2
+      - trivy-cache:/home/lab/.cache/trivy
+    environment:
+      MAVEN_OPTS: "-Xmx1g"
+
+volumes:
+  lab-data:
+  maven-cache:
+  trivy-cache:
