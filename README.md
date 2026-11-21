@@ -1,8 +1,8 @@
 # Upgrade Lab — Rust + native sandbox
 
 Målet är ett självbärande verktyg för SBOM, sårbarhetsskanning och gemensamt
-godkända uppgraderingar av Java-repon. **Inget Docker-/Compose-beroende i den nya
-Rust-versionen.**
+godkända uppgraderingar av Java-repon. **Rust med native sandbox — inget
+Docker-/Compose- eller Python-beroende.**
 
 ## Status
 
@@ -27,9 +27,7 @@ SQLite**, parallella jobb, felklassificering och begränsade retries.
 beslutskön startar inte fixar automatiskt; `factory run` krävs.
 Rust-binären behöver inte Python. `serve` finns ännu inte i Rust.
 
-Python-prototypen och dess valfria containerfiler behålls som referens. Se
-[tidigare prototypinstruktioner](docs/python-prototype.md); de beskriver inte den
-nya Rust-versionen. Använd inte prototypens värdkörda byggpipeline för obetrodd kod.
+Den tidigare Python-/containerprototypen är borttagen. Historiken finns i Git.
 
 ## Bygg och testa
 
@@ -93,7 +91,7 @@ Trivy-fynd och därefter en komplett upprepning med nätverket avstängt.
 
 ## Samlad CVE-status över 20 repon
 
-Skapa nya, separata Rust-testrepon. Befintliga Python-repon i `.lab/repos/` lämnas
+Skapa nya, separata testrepon. Befintliga lokala repon i `.lab/repos/` lämnas
 orörda. Alla 20 nya repon har samma avsiktligt gamla beroende och två Java-tester;
 de representerar ännu inte olika verksamhetstjänster eller individuella felscenarier.
 
@@ -489,3 +487,19 @@ GitLab-token ska alltid hållas utanför byggjobben.
 Referensarkitektur studerad i `../codex/codex-rs/sandboxing/` och
 `../codex/codex-rs/linux-sandbox/`. Vår minimala Seatbelt-policy är egen kod;
 Codex hela implementation har inte kopierats eller integrerats.
+
+## Licens
+
+Copyright 2026 Tobias Martelius.
+
+Projektets egen kod och dokumentation är licensierad under
+[Apache License 2.0](LICENSE). Tredjepartsberoenden och hämtade verktyg omfattas
+av sina respektive licenser.
+
+Programvaran tillhandahålls i befintligt skick utan garantier. Se särskilt
+licensens avsnitt 7–8 om garantifriskrivning och ansvarsbegränsning, med de
+undantag som följer av tillämplig lag. Detta är ingen garanti mot rättsliga krav.
+
+Granska och testa genererade ändringar före merge eller driftsättning, använd
+backup och begränsade behörigheter. Skanning garanterar inte att alla sårbarheter
+hittas eller åtgärdas, och sandboxen ersätter inte en säkerhetsgranskning.
